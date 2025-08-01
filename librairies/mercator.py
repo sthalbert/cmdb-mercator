@@ -47,15 +47,6 @@ def cmdb_create_clusters(data,header):
     extracted_data = []
     description = ""
 
-    # 'id': 8,
-    # 'name': 'o11y-managed-svc-zex-prod',
-    # 'type': 'Kubernetes',
-    # 'description': None,
-    # 'address_ip': None,
-    # 'created_at': '2025-07-31T19:46:26.000000Z',
-    # 'updated_at': '2025-07-31T19:46:26.000000Z',
-    # 'deleted_at': None
-
     for cluster in data["Vms"]:
         name_cluster = ""
 
@@ -94,27 +85,10 @@ def cmdb_create_subnetworks(data,header):
     url = f'{http_server}/subnetworks'
     extracted_data = []
 
-    # 'description': '<p>net-prod-std-dmz</p>',
-    # 'address': '10.35.0.0/16',
-    # 'ip_allocation_type': 'DHCP',
-    # 'responsible_exp': None,
-    # 'dmz': 'Oui',
-    # 'wifi': None,
-    # 'name': 'vpc-27c6ffd8',
-    # 'created_at': '2025-07-30T15:27:58.000000Z',
-    # 'updated_at': '2025-07-30T15:29:01.000000Z',
-    # 'deleted_at': None,
-    # 'connected_subnets_id': None,
-    # 'gateway_id': None,
-    # 'zone': 'DMZ',
-    # 'vlan_id': None,
-    # 'network_id': 16,
-    # 'default_gateway': None
     for vpc in data["Nets"]:
 
         description = next((tag.get("Value") for tag in vpc.get("Tags", []) if tag.get("Key") == "Name"), None)
         zone = description.split('-')[-1]
-
 
         extracted_vpc = {
             "name": vpc["NetId"],
@@ -147,77 +121,72 @@ def get_id_by_name(data, name):
 
     return item['id'] if item else None
 
-def cmdb_create_vms(data,header):
+def extract_vm_data(vm, header):
+    public_ip = vm.get("Nics", [{}])[0].get("LinkPublicIp", {}).get("PublicIp") if vm.get("Nics") else None
+    attribute_value = next((tag.get("Key") for tag in vm.get("Tags", []) if tag.get("Value") == "owned"), None)
+    name_value = next((tag.get("Value") for tag in vm.get("Tags", []) if tag.get("Key") == "Name"), None)
+    network_value = next((tag.get("Value") for tag in vm.get("Tags", []) if tag.get("Key") == "Network"), None)
+
+    cluster_id = None
+
+    if attribute_value is not None:
+        attribute = attribute_value.replace("OscK8sClusterID/", "")
+        name_cluster = re.sub(r'-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', '', attribute)
+        clusters_list = cmdb_read_clusters(header)
+        cluster_id = get_id_by_name(clusters_list.json(), name_cluster)
+    else:
+        attribute = vm["PrivateDnsName"]
+
+    name = re.sub(r'-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', '', name_value)
+
+    image = read_outscale.read_image(vm["ImageId"])
+
+    os = image.get("Images", [{}])[0].get("ImageName") if image.get("Images") else None
+
+    s = vm["VmType"]
+    numbers = re.findall(r'\d+', s)
+    numbers = list(map(int, numbers))
+    cpu = numbers[1]
+    ram = numbers[2]
+
+    extracted_vm = {
+        "name": vm["VmId"],
+        "address_ip": vm["PrivateIp"],
+        "environment": "production",
+        "operating_system": os,
+        "description": name,
+        "attributes": attribute,
+        "cpu": cpu,
+        "memory": ram,
+        "install_date": vm["CreationDate"],
+        "configuration": vm["VmType"],
+        "net_services": vm["NetId"],
+        "type": network_value,
+        "patching_frequency": 30,
+        "physicalServers": 16,
+        "cluster_id": cluster_id,
+    }
+
+    return extracted_vm
+
+def cmdb_create_vms(data, header):
     url = f'{http_server}/logical-servers'
     extracted_data = []
 
     for vm in data["Vms"]:
-
-        public_ip = vm.get("Nics", [{}])[0].get("LinkPublicIp", {}).get("PublicIp") if vm.get("Nics") else None
-        attribute_value = next((tag.get("Key") for tag in vm.get("Tags", []) if tag.get("Value") == "owned"), None)
-        name_value = next((tag.get("Value") for tag in vm.get("Tags", []) if tag.get("Key") == "Name"), None)
-        network_value = next((tag.get("Value") for tag in vm.get("Tags", []) if tag.get("Key") == "Network"), None)
-
-        cluster_id = None
-
-        # print(name_value)
-        if attribute_value is not None:
-            attribute = attribute_value.replace("OscK8sClusterID/", "")
-            name_cluster = re.sub(r'-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', '',attribute)
-            clusters_list = cmdb_read_clusters(header)
-            cluster_id = get_id_by_name(clusters_list.json(),name_cluster)
-        else:
-            attribute = vm["PrivateDnsName"]
-
-        name = re.sub(r'-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$', '', name_value)
-
-        image = read_outscale.read_image(vm["ImageId"])
-
-        os = image.get("Images", [{}])[0].get("ImageName") if image.get("Images") else None
-
-        # get CPU and RAM from the VmType
-        s = vm["VmType"]
-        numbers = re.findall(r'\d+', s)
-        numbers = list(map(int, numbers))
-        cpu = numbers[1]
-        ram = numbers[2]
-
-        # generate Json payload
-        extracted_vm = {
-            "name": vm["VmId"],
-            "address_ip": vm["PrivateIp"],
-            "environment": "production",
-            "operating_system": os,
-            "description": name,
-            "attributes": attribute,
-            "cpu": cpu,
-            "memory": ram,
-            "install_date": vm["CreationDate"],
-            "configuration": vm["VmType"],
-            "net_services": vm["NetId"],
-            "type": network_value,
-            "patching_frequency": 30,
-            "physicalServers": 16,
-            "cluster_id": cluster_id,
-        }
+        extracted_vm = extract_vm_data(vm, header)
         extracted_data.append(extracted_vm)
 
-    # Afficher les données extraites
     for vm in extracted_data:
-
-        # print(header)
         print(vm)
         response = requests.post(url, headers=header, json=vm)
-        # response = requests.get(url, headers=header)
         sleep(1)
 
         if response.status_code == 201:
-            # Afficher la réponse JSON
             print(response.json())
         else:
             if response.status_code == 429:
                 sleep(3)
                 response = requests.post(url, headers=header, json=vm)
             else:
-                # Afficher le code d'erreur
                 print(f"Erreur: {response.status_code}")

@@ -16,5 +16,6 @@ data = read_vms()
 #
 # print(data)
 #
+clusters = cmdb_create_clusters(data,header)
 result = cmdb_create_vms(data,header)
 
